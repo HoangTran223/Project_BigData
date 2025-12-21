@@ -1,0 +1,53 @@
+# Dockerfile for Spark Structured Streaming job
+FROM python:3.11-slim
+
+# Install dependencies and download Java 11 from Adoptium (Eclipse Temurin)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Download and install Java 11 (LTS) from Adoptium
+RUN wget -q -O /tmp/java11.tar.gz https://api.adoptium.net/v3/binary/latest/11/ga/linux/x64/jdk/hotspot/normal/adoptium && \
+    tar -xz -C /opt -f /tmp/java11.tar.gz && \
+    mv /opt/jdk-11* /opt/java-11 && \
+    rm -rf /tmp/java11.tar.gz \
+           /opt/java-11/*src.zip \
+           /opt/java-11/lib/missioncontrol \
+           /opt/java-11/lib/visualvm \
+           /opt/java-11/lib/*javafx* \
+           /opt/java-11/jmods/*javafx* \
+           /opt/java-11/jmods/*jfr* \
+           /opt/java-11/man
+
+# Set JAVA_HOME
+ENV JAVA_HOME=/opt/java-11
+ENV PATH=$JAVA_HOME/bin:$PATH
+
+# Verify Java installation
+RUN java -version
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install PySpark
+RUN pip install --no-cache-dir pyspark==3.5.0
+
+# Copy application code
+COPY spark/ ./spark/
+COPY aqi_calculator.py .
+
+# Set environment variables for Spark
+ENV PYSPARK_PYTHON=python3
+ENV PYSPARK_DRIVER_PYTHON=python3
+ENV SPARK_HOME=/usr/local/lib/python3.11/site-packages/pyspark
+
+# Default command
+CMD ["python", "spark/stream_processor.py"]
+

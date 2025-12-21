@@ -1,0 +1,13 @@
+requests==2.31.0
+pandas==2.1.4
+numpy==1.26.3
+tqdm==4.66.1
+kafka-python>=2.3.0
+six>=1.16.0
+pyarrow==14.0.2
+s3fs==2024.2.0
+clickhouse-driver==0.2.6
+clickhouse-connect==0.7.0
+minio==7.2.0
+pyspark==3.5.0
+
