@@ -1,26 +1,28 @@
-# Hệ thống Phân tích và Giám sát Chất lượng Không khí Real-time
+# Hệ thống Thu thập và Xử lý Dữ liệu Chất lượng Không khí cho ML Training
 
 ## Mục đích
 
-Hệ thống thu thập, xử lý và phân tích dữ liệu chất lượng không khí từ **OpenAQ API** cho khu vực **Đông Nam Á** (11 quốc gia), tính toán **AQI (Air Quality Index)** theo tiêu chuẩn US EPA, và lưu trữ trong Data Lake (Bronze/Silver/Gold) để phân tích.
+Hệ thống thu thập, xử lý và lưu trữ dữ liệu chất lượng không khí từ **OpenAQ API** cho khu vực **Đông Nam Á** (11 quốc gia), tính toán **AQI (Air Quality Index)** theo tiêu chuẩn US EPA, và lưu trữ trong Data Lake (Bronze/Silver/Gold) để phục vụ **ML Training** (time series prediction).
 
 **Use Cases:**
-- Giám sát chất lượng không khí real-time
-- Phân tích xu hướng ô nhiễm theo thời gian và địa lý
-- So sánh chất lượng không khí giữa các quốc gia/trạm
-- Cảnh báo khi AQI vượt ngưỡng an toàn
+- Thu thập historical data cho ML training
+- Xử lý batch data theo pipeline tuần tự (giảm workload)
+- Export dữ liệu theo quốc gia/date range cho training
+- Phân tích time series data cho dự đoán chất lượng không khí
 
 ## Kiến trúc Hệ thống
 
 ```
-OpenAQ API → Kafka → Spark Streaming → MinIO (Bronze/Silver/Gold) → ClickHouse
+OpenAQ API → Kafka → [Batch Pipeline] → MinIO (Bronze/Silver/Gold) → ClickHouse
+                                    ↓
+                            Kafka → Bronze → Silver → Gold
 ```
 
 **Công nghệ:**
-- **Kafka**: Message queue (streaming buffer)
-- **Spark Structured Streaming**: Xử lý real-time
+- **Kafka**: Message queue (buffer cho batch processing)
+- **Spark Batch Processing**: Xử lý theo pipeline tuần tự
 - **MinIO**: Object storage (S3-compatible, Parquet format)
-- **ClickHouse**: OLAP database (phân tích nhanh)
+- **ClickHouse**: OLAP database (phân tích và export)
 
 ## Quy trình Xử lý Dữ liệu
 
@@ -36,45 +38,40 @@ OpenAQ API → Kafka → Spark Streaming → MinIO (Bronze/Silver/Gold) → Clic
 
 **File:** `collect_data.py`
 
-### Bước 2: Stream Processing (Spark)
+### Bước 2: Batch Processing (Spark)
 **Input:** Kafka messages  
-**Mục đích:** Xử lý dữ liệu theo 3 tầng Data Lake để phục vụ các use case khác nhau
+**Mục đích:** Xử lý dữ liệu theo pipeline tuần tự (Kafka → Bronze → Silver → Gold) để giảm workload và phù hợp với ML training
 
-**Xử lý 3 tầng song song:**
+**Pipeline tuần tự (sequential):**
 
-1. **Bronze** (Raw): Lưu toàn bộ dữ liệu thô từ Kafka
-   - **Khác biệt:** Giữ nguyên 100% dữ liệu gốc, không filter, có cả `value` (gốc) và `value_standard` (đã convert)
-   - **Ví dụ:** Một trạm có 10 measurements trong 1 giờ → lưu cả 10 records
-   - Trigger: 10 giây | Format: Parquet | Partition: `year=YYYY/month=MM/day=DD/`
+1. **Job 1: Kafka → Bronze** (Raw Data)
+   - **Input:** Kafka topic `openaq-raw-measurements`
+   - **Xử lý:** Parse JSON từ Kafka, lọc null, giữ nguyên 100% dữ liệu gốc
+   - **Output:** `s3a://air-quality-data/bronze/year=YYYY/month=MM/day=DD/*.parquet`
+   - **Workload:** Parse Kafka messages (1 lần duy nhất)
 
-2. **Silver** (Cleaned): Lọc và chuẩn hóa dữ liệu
-   - **Khác biệt:** 
-     - Chỉ giữ dữ liệu hợp lệ (value >= 0, không null)
-     - Chuẩn hóa datetime
-     - Chỉ lưu `value_standard` (giá trị đã convert về đơn vị chuẩn US EPA: PM2.5/PM10 = µg/m³, O3/CO/SO2/NO2 = ppm)
-   - **Ví dụ:** 
-     - Input: `{"value": 45.2, "unit": "µg/m³", "value_standard": 45.2}` (PM2.5) → Output: `{"value": 45.2}` (PM2.5 đã là µg/m³ nên không cần convert)
-     - Input: `{"value": 120, "unit": "µg/m³", "value_standard": 0.055}` (O3) → Output: `{"value": 0.055}` (O3 convert từ 120 µg/m³ → 0.055 ppm theo công thức US EPA)
-     - **Giải thích:** O3 từ API có thể là µg/m³ nhưng US EPA tính AQI theo ppm, nên phải convert. `value: 120` là giá trị gốc (có thể khác nhau giữa các trạm), `value_standard: 0.055` là giá trị chuẩn để tính AQI
-   - Trigger: 10 giây | Format: Parquet | Partition: `year=YYYY/month=MM/day=DD/`
+2. **Job 2: Bronze → Silver** (Cleaned Data)
+   - **Input:** Parquet files từ Bronze (đọc từ MinIO, nhanh hơn Kafka)
+   - **Xử lý:** 
+     - Lọc hợp lệ (`value >= 0`, không null)
+     - Chỉ lưu `value_standard` (đã convert về đơn vị chuẩn US EPA)
+   - **Output:** `s3a://air-quality-data/silver/year=YYYY/month=MM/day=DD/*.parquet`
+   - **Workload:** Đọc Parquet (nhanh hơn parse JSON từ Kafka)
 
-3. **Gold** (Aggregated): Tổng hợp theo giờ (AQI)
-   - **Khác biệt:** 
-     - Nhóm tất cả measurements của cùng 1 location trong cùng 1 giờ thành 1 record
-     - Tính AQI cao nhất (max) trong giờ đó
-     - Tổng hợp tất cả parameters thành arrays: `parameters: ["pm25", "pm10", "o3"]`, `values: [45.2, 60.1, 0.055]`
-   - **Ví dụ:** 
-     - Input: 1 trạm có 3 measurements trong giờ 10:00 (pm25 AQI=50, pm10 AQI=60, o3 AQI=45)
-     - Output: 1 record với `aqi: 60` (max), `parameters: ["pm25", "pm10", "o3"]`, `values: [50, 60, 45]`
-   - Trigger: 1 phút | Format: Parquet | Partition: `year=YYYY/month=MM/day=DD/`
+3. **Job 3: Silver → Gold** (Aggregated by Hour)
+   - **Input:** Parquet files từ Silver
+   - **Xử lý:**
+     - Aggregate theo `location_id` + `hour`
+     - Tính AQI max, collect parameters và values thành arrays
+   - **Output:** `s3a://air-quality-data/gold/year=YYYY/month=MM/day=DD/*.parquet`
+   - **Workload:** Đọc Parquet và aggregate (không cần parse lại)
 
-**Output:** 
-- Spark ghi trực tiếp Parquet files vào **MinIO** (object storage S3-compatible)
-- Location: `s3a://air-quality-data/` bucket trong MinIO
-- Mỗi tầng có thư mục riêng: `bronze/`, `silver/`, `gold/`
-- Files được partition theo ngày: `year=2025/month=12/day=21/*.parquet`
+**Ưu điểm:**
+- ✅ Giảm workload: Parse Kafka 1 lần (chỉ Bronze), Silver/Gold đọc từ Parquet
+- ✅ Tái sử dụng data: Mỗi tầng phụ thuộc tầng trước, không parse lại
+- ✅ Phù hợp batch processing: Chạy on-demand cho ML training
 
-**File:** `spark/stream_processor.py`
+**File:** `spark/batch_processor.py`
 
 ### Bước 3: Load vào ClickHouse
 **Input:** Parquet files từ MinIO (đã được Spark ghi ở Bước 2)  
@@ -147,7 +144,7 @@ KH      | 61.33   | 118     | 176
 | Bước              | Input           | Output              | Technology                 |
 |-------------------|-----------------|---------------------|----------------------------|
 | **1. Ingestion**  | OpenAQ API      | JSON → Kafka        | Python, Kafka Producer     |
-| **2. Processing** | Kafka messages  | Parquet → MinIO     | Spark Structured Streaming |
+| **2. Processing** | Kafka messages  | Parquet → MinIO     | Spark Batch Processing     |
 | **3. Loading**    | Parquet (MinIO) | Tables → ClickHouse | Python, clickhouse-connect |
 | **4. Analytics**  | SQL queries     | Query results       | ClickHouse SQL             |
 
@@ -189,22 +186,29 @@ docker-compose up -d
 
 # Setup MinIO bucket
 python setup_minio_buckets.py
-
-# Khởi động Spark streaming
-docker-compose up -d --build spark-streaming
 ```
 
-### 2. Thu thập Dữ liệu
+### 2. Thu thập Dữ liệu vào Kafka
 ```bash
-# Đợi Spark khởi động xong (30-60 giây), sau đó:
-python collect_data.py --mode historical --days 7 --sample 5
+python collect_data.py --mode historical --days 10000
 ```
 
-**⚠️ Lưu ý:** Spark chỉ đọc dữ liệu mới từ khi khởi động (`startingOffsets: "latest"`). Phải gửi dữ liệu SAU KHI Spark đã chạy.
-
-### 3. Load vào ClickHouse
+### 3. Xử lý Batch Pipeline
 ```bash
-# Đợi Spark xử lý (10-60 giây), sau đó:
+# Start Spark container
+docker-compose up -d spark-batch
+
+# Chạy toàn bộ pipeline (Kafka → Bronze → Silver → Gold)
+docker exec spark-batch python /app/spark/batch_processor.py --layer all
+
+# Hoặc chạy từng bước riêng:
+docker exec spark-batch python /app/spark/batch_processor.py --layer bronze  # Kafka → Bronze
+docker exec spark-batch python /app/spark/batch_processor.py --layer silver  # Bronze → Silver
+docker exec spark-batch python /app/spark/batch_processor.py --layer gold    # Silver → Gold
+```
+
+### 4. Load vào ClickHouse
+```bash
 python load_to_clickhouse.py --layer all
 ```
 
@@ -229,7 +233,7 @@ SELECT country, avg(aqi) FROM gold_hourly_aqi GROUP BY country;
 ## Files Quan trọng
 
 - `collect_data.py`: Thu thập dữ liệu từ OpenAQ → Kafka
-- `spark/stream_processor.py`: Spark streaming job (Kafka → MinIO)
+- `spark/batch_processor.py`: Spark batch processing pipeline (Kafka → Bronze → Silver → Gold)
 - `load_to_clickhouse.py`: Load từ MinIO → ClickHouse
 - `aqi_calculator.py`: Tính toán AQI theo US EPA
 - `docker-compose.yml`: Cấu hình tất cả services
@@ -245,15 +249,15 @@ SELECT country, avg(aqi) FROM gold_hourly_aqi GROUP BY country;
 ```bash
 python collect_data.py --mode historical --days 10000
 ```
-- Đợi script xong = đã gửi hết dữ liệu vào Kafka
-- Spark sẽ tiếp tục xử lý dữ liệu từ Kafka và ghi vào MinIO
 
-**Bước 2:** Đợi Spark xử lý xong
+**Bước 2:** Xử lý Batch Pipeline
 ```bash
-# Kiểm tra số lượng files trong MinIO (chạy nhiều lần để xem có tăng không)
-python3 -c "import s3fs; fs = s3fs.S3FileSystem(key='minioadmin', secret='minioadmin123', endpoint_url='http://localhost:9000', use_ssl=False); print('Bronze:', len(fs.glob('air-quality-data/bronze/**/*.parquet'))); print('Silver:', len(fs.glob('air-quality-data/silver/**/*.parquet'))); print('Gold:', len(fs.glob('air-quality-data/gold/**/*.parquet')))"
+# Start Spark container
+docker-compose up -d spark-batch
+
+# Chạy toàn bộ pipeline
+docker exec spark-batch python /app/spark/batch_processor.py --layer all
 ```
-- Spark xử lý xong khi: Số lượng files không tăng thêm nữa (sau khi Bước 1 đã xong)
 
 **Bước 3:** Load vào ClickHouse
 ```bash

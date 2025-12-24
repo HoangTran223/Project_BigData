@@ -78,13 +78,14 @@ services:
     networks:
       - bigdata-network
 
-  # Spark Streaming Job
-  spark-streaming:
+  # Spark Batch Processing Job (for ML Training)
+  # Pipeline: Kafka → Bronze → Silver → Gold (sequential)
+  spark-batch:
     build:
       context: .
       dockerfile: Dockerfile.spark
-    container_name: spark-streaming
-    hostname: spark-streaming
+    container_name: spark-batch
+    hostname: spark-batch
     depends_on:
       - kafka
       - minio
@@ -101,7 +102,8 @@ services:
       - ./aqi_calculator.py:/app/aqi_calculator.py
     networks:
       - bigdata-network
-    restart: unless-stopped
+    # Don't auto-start - run manually for batch processing
+    restart: "no"
 
 networks:
   bigdata-network:
