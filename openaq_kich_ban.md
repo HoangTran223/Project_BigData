@@ -199,12 +199,23 @@ python collect_data.py --mode historical --days 10000
 docker-compose up -d spark-batch
 
 # Chạy toàn bộ pipeline (Kafka → Bronze → Silver → Gold)
-docker exec spark-batch python /app/spark/batch_processor.py --layer all
+# Sử dụng spark-submit để tự động download dependencies
+docker exec spark-batch spark-submit \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4 \
+  /app/spark/batch_processor.py --layer all
 
 # Hoặc chạy từng bước riêng:
-docker exec spark-batch python /app/spark/batch_processor.py --layer bronze  # Kafka → Bronze
-docker exec spark-batch python /app/spark/batch_processor.py --layer silver  # Bronze → Silver
-docker exec spark-batch python /app/spark/batch_processor.py --layer gold    # Silver → Gold
+docker exec spark-batch spark-submit \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4 \
+  /app/spark/batch_processor.py --layer bronze  # Kafka → Bronze
+
+docker exec spark-batch spark-submit \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4 \
+  /app/spark/batch_processor.py --layer silver  # Bronze → Silver
+
+docker exec spark-batch spark-submit \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4 \
+  /app/spark/batch_processor.py --layer gold    # Silver → Gold
 ```
 
 ### 4. Load vào ClickHouse
@@ -255,8 +266,10 @@ python collect_data.py --mode historical --days 10000
 # Start Spark container
 docker-compose up -d spark-batch
 
-# Chạy toàn bộ pipeline
-docker exec spark-batch python /app/spark/batch_processor.py --layer all
+# Chạy toàn bộ pipeline (sử dụng spark-submit để tự động download dependencies)
+docker exec spark-batch spark-submit \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4 \
+  /app/spark/batch_processor.py --layer all
 ```
 
 **Bước 3:** Load vào ClickHouse

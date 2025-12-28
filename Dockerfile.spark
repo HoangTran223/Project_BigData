@@ -48,6 +48,6 @@ ENV PYSPARK_PYTHON=python3
 ENV PYSPARK_DRIVER_PYTHON=python3
 ENV SPARK_HOME=/usr/local/lib/python3.11/site-packages/pyspark
 
-# Default command
-CMD ["python", "spark/stream_processor.py"]
+# Default command - keep container running (batch jobs run manually)
+CMD ["sleep", "infinity"]
 

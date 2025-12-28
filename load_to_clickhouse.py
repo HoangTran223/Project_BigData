@@ -82,6 +82,19 @@ def load_bronze_to_clickhouse(client, fs, date_filter=None):
             df['datetime'] = pd.to_datetime(df['datetime'])
             df['ingestion_timestamp'] = pd.to_datetime(df['ingestion_timestamp'], errors='coerce')
             
+            # Fill None values for non-nullable columns
+            # String columns
+            string_cols = ['location_name', 'country', 'parameter', 'unit', 'aqi_category']
+            for col in string_cols:
+                if col in df.columns:
+                    df[col] = df[col].fillna('')
+            
+            # Float64 columns
+            float_cols = ['latitude', 'longitude', 'value', 'value_standard', 'aqi']
+            for col in float_cols:
+                if col in df.columns:
+                    df[col] = df[col].fillna(0.0)
+            
             # Insert into ClickHouse
             client.insert_df('bronze_measurements', df)
             total_records += len(df)
@@ -121,7 +134,26 @@ def load_silver_to_clickhouse(client, fs, date_filter=None):
             
             # Convert datetime columns
             df['datetime'] = pd.to_datetime(df['datetime'])
-            df['processing_timestamp'] = pd.to_datetime(df['processing_timestamp'], errors='coerce')
+            # processing_timestamp is optional (ClickHouse has DEFAULT now())
+            if 'processing_timestamp' in df.columns:
+                df['processing_timestamp'] = pd.to_datetime(df['processing_timestamp'], errors='coerce')
+            
+            # unit is optional (Silver layer uses value_standard, unit not needed)
+            if 'unit' not in df.columns:
+                df['unit'] = ''  # Empty string for non-nullable String column
+            
+            # Fill None values for non-nullable columns
+            # String columns
+            string_cols = ['location_name', 'country', 'parameter', 'unit', 'aqi_category']
+            for col in string_cols:
+                if col in df.columns:
+                    df[col] = df[col].fillna('')
+            
+            # Float64 columns
+            float_cols = ['latitude', 'longitude', 'value', 'aqi']
+            for col in float_cols:
+                if col in df.columns:
+                    df[col] = df[col].fillna(0.0)
             
             # Insert into ClickHouse
             client.insert_df('silver_measurements', df)
@@ -162,7 +194,22 @@ def load_gold_to_clickhouse(client, fs, date_filter=None):
             
             # Convert datetime columns
             df['datetime'] = pd.to_datetime(df['datetime'])
-            df['aggregation_timestamp'] = pd.to_datetime(df['aggregation_timestamp'], errors='coerce')
+            # aggregation_timestamp is optional (ClickHouse has DEFAULT now())
+            if 'aggregation_timestamp' in df.columns:
+                df['aggregation_timestamp'] = pd.to_datetime(df['aggregation_timestamp'], errors='coerce')
+            
+            # Fill None values for non-nullable columns
+            # String columns
+            string_cols = ['location_name', 'country', 'aqi_category']
+            for col in string_cols:
+                if col in df.columns:
+                    df[col] = df[col].fillna('')
+            
+            # Float64 columns
+            float_cols = ['latitude', 'longitude', 'aqi']
+            for col in float_cols:
+                if col in df.columns:
+                    df[col] = df[col].fillna(0.0)
             
             # Ensure arrays are proper lists for ClickHouse
             # Parquet files from Spark should already have arrays as lists
@@ -170,10 +217,14 @@ def load_gold_to_clickhouse(client, fs, date_filter=None):
                 df['parameters'] = df['parameters'].apply(
                     lambda x: x if isinstance(x, list) else (list(x) if hasattr(x, '__iter__') and not isinstance(x, str) else [])
                 )
+                # Fill None arrays with empty list
+                df['parameters'] = df['parameters'].apply(lambda x: x if x is not None else [])
             if 'values' in df.columns:
                 df['values'] = df['values'].apply(
                     lambda x: x if isinstance(x, list) else (list(x) if hasattr(x, '__iter__') and not isinstance(x, str) else [])
                 )
+                # Fill None arrays with empty list
+                df['values'] = df['values'].apply(lambda x: x if x is not None else [])
             
             # Insert into ClickHouse
             client.insert_df('gold_hourly_aqi', df)
