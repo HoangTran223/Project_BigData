@@ -79,30 +79,26 @@ def train_model(train_df: pd.DataFrame,
     if len(feature_cols) > 15:
         print(f"  ... and {len(feature_cols) - 15} more")
     
-    # LightGBM parameters (MAXIMIZED for high CPU capacity)
-    # Aggressive settings to maximize performance:
-    # - num_leaves: Maximized to 256 for maximum model capacity
-    # - num_iterations: Increased to 5000 for extensive training
-    # - learning_rate: Kept low (0.02) for fine convergence with many iterations
-    # - Early stopping: High patience (200) to allow full training
+    # LightGBM parameters (optimized for best performance)
     params = {
         'objective': 'regression',
         'metric': 'rmse',
         'boosting_type': 'gbdt',
-        'num_leaves': 256,  # MAXIMIZED (96→256) for maximum capacity
-        'learning_rate': 0.02,  # Further reduced (0.025→0.02) for fine convergence
-        'feature_fraction': 0.95,  # Increased (0.9→0.95) to use almost all features
-        'bagging_fraction': 0.95,  # Increased (0.9→0.95) to use almost all data
+        'num_leaves': 128,
+        'learning_rate': 0.025,
+        'feature_fraction': 0.85,
+        'bagging_fraction': 0.85,
         'bagging_freq': 5,
-        'min_child_samples': 20,  # Reduced (25→20) for more flexibility with large capacity
-        'num_iterations': 5000,  # MAXIMIZED (3000→5000) for extensive training
-        'early_stopping_rounds': 200,  # MAXIMIZED (150→200) for high patience
+        'min_child_samples': 30,
+        'num_iterations': 5000,
+        'early_stopping_rounds': 150,
         'verbose': -1,
-        'lambda_l1': 0.03,  # Further reduced (0.05→0.03) to allow maximum learning
-        'lambda_l2': 0.2,  # Increased (0.15→0.2) for stronger L2 regularization
-        'max_bin': 511,  # Increased (255→511) for finer binning
-        'force_row_wise': True,  # For better performance
-        'num_threads': -1  # Use all CPU cores
+        'lambda_l1': 0.1,
+        'lambda_l2': 0.3,
+        'max_bin': 255,
+        'force_row_wise': True,
+        'num_threads': -1,
+        'min_gain_to_split': 0.1
     }
     
     # Create datasets

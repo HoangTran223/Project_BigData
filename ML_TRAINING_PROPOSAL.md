@@ -48,9 +48,10 @@
 
 ## Output
 
-**Trained Models**:
+**Trained Models**: `HoangTran223/BigData_ML_Training`, include:
 - `models/lightgbm_global.pkl` - LightGBM model
 - `models/xgboost_global.pkl` - XGBoost model
+
 
 **Model File Structure**:
 ```python
@@ -69,6 +70,34 @@
 - Test metrics (RMSE, MAE, MAPE, R²)
 - Feature importance plots
 - Prediction visualizations
+
+---
+
+## Model Prediction Explanation
+
+### Target Variable: `aqi_next`
+- **Definition**: AQI của **1 giờ sau** (next hour forecast)
+- **Creation**: `aqi_next = shift(-1)` - lấy giá trị AQI của giờ tiếp theo
+- **Example**: 
+  - Tại 10:00, AQI = 50 → `aqi_next` = AQI tại 11:00 (ví dụ: 52)
+  - Model dự đoán AQI cho giờ tiếp theo dựa trên features hiện tại
+
+### Input Features
+Tại mỗi thời điểm, model sử dụng:
+- **Current**: AQI hiện tại (`aqi`)
+- **Lag**: AQI 1h trước (`aqi_lag_1h`), 24h trước (`aqi_lag_24h`), 1 tuần trước (`aqi_lag_168h`)
+- **Rolling**: Mean, std, max, min của 7 ngày và 30 ngày
+- **Time**: Hour, day_of_week, month, day_of_year, is_weekend
+- **Pollutants**: pm25, pm10, o3, co, so2, no2
+- **Spatial**: country_encoded, latitude, longitude
+
+### Metrics Calculation
+- **RMSE**: Căn bậc hai của trung bình bình phương lỗi giữa dự đoán và `aqi_next` thực tế
+- **MAE**: Trung bình giá trị tuyệt đối lỗi
+- **MAPE**: Phần trăm lỗi trung bình (chỉ tính với giá trị > 0.1)
+- **R²**: Hệ số xác định (độ phù hợp của model)
+
+**Ví dụ**: Nếu RMSE = 20.46, nghĩa là sai số trung bình khoảng ±20.46 điểm AQI cho dự đoán 1 giờ sau.
 
 ---
 

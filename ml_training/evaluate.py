@@ -37,21 +37,16 @@ def evaluate_model(model_data: dict, test_df: pd.DataFrame, output_dir: str = "r
     X_test = test_df[feature_cols].fillna(0)
     y_test = test_df[target_col]
     
-    # Predictions (support both LightGBM and XGBoost)
     import lightgbm as lgb
     if isinstance(model, lgb.Booster):
-        # LightGBM
         y_pred = model.predict(X_test, num_iteration=model.best_iteration)
     else:
-        # XGBoost
         y_pred = model.predict(X_test)
     
-    # Calculate metrics
     rmse = np.sqrt(mean_squared_error(y_test, y_pred))
     mae = mean_absolute_error(y_test, y_pred)
     
-    # MAPE: Only calculate for non-zero values to avoid division issues
-    mask = (y_test != 0) & (y_test > 0.1)  # Ignore values <= 0.1
+    mask = (y_test != 0) & (y_test > 0.1)
     if mask.sum() > 0:
         mape = np.mean(np.abs((y_test[mask] - y_pred[mask]) / y_test[mask])) * 100
     else:
@@ -71,10 +66,8 @@ def evaluate_model(model_data: dict, test_df: pd.DataFrame, output_dir: str = "r
     print(f"R²:   {r2:.4f}")
     print("=" * 80)
     
-    # Create visualizations
     os.makedirs(output_dir, exist_ok=True)
     
-    # 1. Predicted vs Actual
     plt.figure(figsize=(10, 6))
     plt.scatter(y_test, y_pred, alpha=0.5, s=1)
     plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--', lw=2)
@@ -85,7 +78,6 @@ def evaluate_model(model_data: dict, test_df: pd.DataFrame, output_dir: str = "r
     plt.savefig(os.path.join(output_dir, 'predicted_vs_actual.png'), dpi=150)
     plt.close()
     
-    # 2. Residuals
     residuals = y_test - y_pred
     plt.figure(figsize=(10, 6))
     plt.scatter(y_pred, residuals, alpha=0.5, s=1)
@@ -97,21 +89,15 @@ def evaluate_model(model_data: dict, test_df: pd.DataFrame, output_dir: str = "r
     plt.savefig(os.path.join(output_dir, 'residuals.png'), dpi=150)
     plt.close()
     
-    # 3. Feature Importance (support both LightGBM and XGBoost)
     import lightgbm as lgb
     if isinstance(model, lgb.Booster):
-        # LightGBM
         importances = model.feature_importance(importance_type='gain')
     else:
-        # XGBoost
         try:
-            # Try get_booster() method
             booster = model.get_booster()
             importance_dict = booster.get_score(importance_type='gain')
-            # Convert dict to list in same order as feature_cols
             importances = [importance_dict.get(f'f{i}', 0) for i, f in enumerate(feature_cols)]
         except:
-            # Fallback to feature_importances_ attribute
             importances = model.feature_importances_
     
     feature_importance = pd.DataFrame({
@@ -128,7 +114,6 @@ def evaluate_model(model_data: dict, test_df: pd.DataFrame, output_dir: str = "r
     plt.savefig(os.path.join(output_dir, 'feature_importance.png'), dpi=150)
     plt.close()
     
-    # 4. Time Series Plot (sample location)
     if 'location_id' in test_df.columns:
         sample_location = test_df['location_id'].iloc[0]
         location_data = test_df[test_df['location_id'] == sample_location].sort_values('datetime')
@@ -137,7 +122,6 @@ def evaluate_model(model_data: dict, test_df: pd.DataFrame, output_dir: str = "r
             plt.figure(figsize=(14, 6))
             plt.plot(location_data['datetime'], location_data['aqi'], label='Actual', alpha=0.7)
             
-            # Get predictions for this location
             location_indices = location_data.index
             location_pred = y_pred[test_df.index.isin(location_indices)]
             if len(location_pred) == len(location_data):
@@ -152,7 +136,6 @@ def evaluate_model(model_data: dict, test_df: pd.DataFrame, output_dir: str = "r
             plt.savefig(os.path.join(output_dir, 'time_series_sample.png'), dpi=150)
             plt.close()
     
-    # Save metrics
     metrics = {
         'rmse': rmse,
         'mae': mae,

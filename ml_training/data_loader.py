@@ -26,16 +26,12 @@ class AirQualityDataLoader:
         # Auto-detect endpoint: try minio (Docker) first, then localhost
         if minio_endpoint is None:
             import socket
-            # Try to connect to minio:9000 (Docker network)
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(1)
                 result = sock.connect_ex(('minio', 9000))
                 sock.close()
-                if result == 0:
-                    minio_endpoint = "http://minio:9000"
-                else:
-                    minio_endpoint = "http://localhost:9000"
+                minio_endpoint = "http://minio:9000" if result == 0 else "http://localhost:9000"
             except:
                 minio_endpoint = "http://localhost:9000"
         
@@ -67,7 +63,6 @@ class AirQualityDataLoader:
         Returns:
             DataFrame with columns: datetime, location_id, country, aqi, etc.
         """
-        """Load from MinIO Parquet files."""
         bucket = 'air-quality-data'
         gold_path = f'{bucket}/gold/'
         
@@ -136,7 +131,6 @@ class AirQualityDataLoader:
         df = df.copy()
         
         print("Creating time features...")
-        # Time features
         df['hour'] = df['datetime'].dt.hour
         df['day_of_week'] = df['datetime'].dt.dayofweek
         df['month'] = df['datetime'].dt.month
@@ -144,13 +138,11 @@ class AirQualityDataLoader:
         df['is_weekend'] = df['datetime'].dt.dayofweek >= 5
         
         print("Creating lag features...")
-        # Lag features (AQI from previous hours) - groupby location_id to preserve time series
         df['aqi_lag_1h'] = df.groupby('location_id')['aqi'].shift(1)
         df['aqi_lag_24h'] = df.groupby('location_id')['aqi'].shift(24)
-        df['aqi_lag_168h'] = df.groupby('location_id')['aqi'].shift(168)  # 1 week
+        df['aqi_lag_168h'] = df.groupby('location_id')['aqi'].shift(168)
         
         print("Creating rolling statistics...")
-        # Rolling statistics (7 days = 168 hours)
         df['aqi_mean_7d'] = df.groupby('location_id')['aqi'].transform(
             lambda x: x.rolling(168, min_periods=1).mean()
         )
@@ -163,26 +155,20 @@ class AirQualityDataLoader:
         df['aqi_min_7d'] = df.groupby('location_id')['aqi'].transform(
             lambda x: x.rolling(168, min_periods=1).min()
         )
-        
-        # Rolling statistics (30 days = 720 hours)
         df['aqi_mean_30d'] = df.groupby('location_id')['aqi'].transform(
             lambda x: x.rolling(720, min_periods=1).mean()
         )
         
         print("Encoding country...")
-        # Country encoding
         df['country_encoded'] = self.country_encoder.fit_transform(df['country'])
         
         print("Extracting pollutant values from arrays...")
-        # Extract pollutant values from arrays
         pollutants = ['pm25', 'pm10', 'o3', 'co', 'so2', 'no2']
         for pollutant in pollutants:
             df[pollutant] = df.apply(
                 lambda row: self._extract_pollutant_value(row, pollutant), 
                 axis=1
             )
-        
-        # Fill NaN for pollutants (if not available)
         for pollutant in pollutants:
             df[pollutant] = df[pollutant].fillna(0.0)
         

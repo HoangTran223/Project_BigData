@@ -73,32 +73,28 @@ def train_model(train_df: pd.DataFrame,
     if len(feature_cols) > 15:
         print(f"  ... and {len(feature_cols) - 15} more")
     
-    # XGBoost parameters (MAXIMIZED for high CPU capacity)
-    # Aggressive settings to maximize performance:
-    # - n_estimators: Increased to 5000 for extensive training
-    # - max_depth: Increased to 8 with stronger regularization
-    # - learning_rate: Kept moderate (0.03) for balance
-    # - Early stopping: High patience (200) to allow full training
+    # XGBoost parameters (optimized for best performance)
     params = {
         'objective': 'reg:squarederror',
         'eval_metric': 'rmse',
-        'max_depth': 8,  # Increased (7→8) with stronger regularization to prevent overfitting
-        'learning_rate': 0.03,  # Reduced (0.035→0.03) for better convergence with many iterations
-        'subsample': 0.95,  # Increased (0.9→0.95) to use almost all data
-        'colsample_bytree': 0.95,  # Increased (0.9→0.95) to use almost all features
-        'colsample_bylevel': 0.95,  # Increased (0.9→0.95) for consistency
-        'colsample_bynode': 0.95,  # Added for additional feature sampling
-        'min_child_weight': 1,  # Reduced (2→1) for maximum flexibility
-        'n_estimators': 5000,  # MAXIMIZED (3000→5000) for extensive training
+        'max_depth': 6,
+        'learning_rate': 0.03,
+        'subsample': 0.85,
+        'colsample_bytree': 0.85,
+        'colsample_bylevel': 0.85,
+        'colsample_bynode': 0.85,
+        'min_child_weight': 2,
+        'n_estimators': 5000,
         'random_state': 42,
-        'n_jobs': -1,  # Use all CPU cores
-        'early_stopping_rounds': 200,  # MAXIMIZED (150→200) for high patience
-        'reg_alpha': 0.03,  # Further reduced (0.05→0.03) to allow maximum learning
-        'reg_lambda': 0.2,  # Increased (0.15→0.2) for stronger L2 regularization
-        'gamma': 0.15,  # Increased (0.1→0.15) for stronger regularization with deeper trees
-        'tree_method': 'hist',  # Use histogram-based method for speed
-        'max_bin': 512,  # Increased binning for finer splits
-        'grow_policy': 'lossguide'  # Use loss-guided growth for better splits
+        'n_jobs': -1,
+        'early_stopping_rounds': 150,
+        'reg_alpha': 0.05,
+        'reg_lambda': 0.15,
+        'gamma': 0.1,
+        'tree_method': 'hist',
+        'max_bin': 256,
+        'grow_policy': 'lossguide',
+        'max_leaves': 128
     }
     
     # Train
