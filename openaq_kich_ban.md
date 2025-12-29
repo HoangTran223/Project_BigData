@@ -44,34 +44,174 @@ OpenAQ API → Kafka → [Batch Pipeline] → MinIO (Bronze/Silver/Gold) → Cli
 
 **Pipeline tuần tự (sequential):**
 
-1. **Job 1: Kafka → Bronze** (Raw Data)
-   - **Input:** Kafka topic `openaq-raw-measurements`
-   - **Xử lý:** Parse JSON từ Kafka, lọc null, giữ nguyên 100% dữ liệu gốc
-   - **Output:** `s3a://air-quality-data/bronze/year=YYYY/month=MM/day=DD/*.parquet`
-   - **Workload:** Parse Kafka messages (1 lần duy nhất)
+#### 1. **Bronze Layer** (Raw Data - Lưu trữ dữ liệu gốc)
 
-2. **Job 2: Bronze → Silver** (Cleaned Data)
-   - **Input:** Parquet files từ Bronze (đọc từ MinIO, nhanh hơn Kafka)
-   - **Xử lý:** 
-     - Lọc hợp lệ (`value >= 0`, không null)
-     - Chỉ lưu `value_standard` (đã convert về đơn vị chuẩn US EPA)
-   - **Output:** `s3a://air-quality-data/silver/year=YYYY/month=MM/day=DD/*.parquet`
-   - **Workload:** Đọc Parquet (nhanh hơn parse JSON từ Kafka)
+**File:** `spark/batch_processor.py`  
+**Hàm:** `process_kafka_to_bronze(spark)`
 
-3. **Job 3: Silver → Gold** (Aggregated by Hour)
-   - **Input:** Parquet files từ Silver
-   - **Xử lý:**
-     - Aggregate theo `location_id` + `hour`
-     - Tính AQI max, collect parameters và values thành arrays
-   - **Output:** `s3a://air-quality-data/gold/year=YYYY/month=MM/day=DD/*.parquet`
-   - **Workload:** Đọc Parquet và aggregate (không cần parse lại)
+**Input:** Kafka topic `openaq-raw-measurements` (JSON messages)
 
-**Ưu điểm:**
-- ✅ Giảm workload: Parse Kafka 1 lần (chỉ Bronze), Silver/Gold đọc từ Parquet
-- ✅ Tái sử dụng data: Mỗi tầng phụ thuộc tầng trước, không parse lại
-- ✅ Phù hợp batch processing: Chạy on-demand cho ML training
+**Xử lý:**
+- **Parse JSON**: Chuyển đổi JSON messages từ Kafka thành Spark DataFrame
+- **Extract fields**: Trích xuất tất cả fields từ schema:
+  - `datetime`, `location_id`, `location_name`, `country`
+  - `latitude`, `longitude`
+  - `parameter` (pm25, pm10, o3, co, so2, no2)
+  - `value` (giá trị gốc từ sensor)
+  - `value_standard` (giá trị đã convert về đơn vị chuẩn US EPA)
+  - `unit` (đơn vị gốc: µg/m³, ppm, etc.)
+  - `aqi`, `aqi_category`
+  - `ingestion_timestamp` (thời điểm thu thập vào Kafka)
+- **Filter cơ bản**: Chỉ loại bỏ records có `datetime`, `location_id`, hoặc `parameter` = null
+- **Partition**: Thêm columns `year`, `month`, `day` để partition theo ngày
 
-**File:** `spark/batch_processor.py`
+**Output:** 
+- Path: `s3a://air-quality-data/bronze/year=YYYY/month=MM/day=DD/*.parquet`
+- Format: Parquet (columnar, compressed)
+- **Đặc điểm**: Giữ nguyên 100% dữ liệu gốc, không mất thông tin
+
+**Mục đích:**
+- ✅ Lưu trữ raw data để có thể replay/reprocess nếu cần
+- ✅ Audit trail: Giữ lại `ingestion_timestamp` và `unit` gốc
+- ✅ Data lineage: Có thể trace lại nguồn gốc dữ liệu
+
+**Ví dụ record:**
+```
+datetime: 2024-01-15 10:00:00
+location_id: 12345
+parameter: pm25
+value: 45.2
+value_standard: 45.2
+unit: µg/m³
+aqi: 125
+aqi_category: "Unhealthy for Sensitive Groups"
+```
+
+---
+
+#### 2. **Silver Layer** (Cleaned Data - Dữ liệu đã làm sạch)
+
+**File:** `spark/batch_processor.py`  
+**Hàm:** `process_bronze_to_silver(spark)`
+
+**Input:** Parquet files từ Bronze layer (đọc từ MinIO, nhanh hơn parse JSON từ Kafka)
+
+**Xử lý:**
+- **Đọc từ Bronze**: Load Parquet files từ MinIO (nhanh hơn parse JSON)
+- **Data Cleaning**:
+  - Chỉ giữ `value_standard` (đã chuẩn hóa về US EPA), bỏ `value` gốc
+  - Loại bỏ `unit` (không cần thiết vì đã chuẩn hóa)
+  - Loại bỏ `ingestion_timestamp` (không cần cho ML training)
+- **Validation Filters**:
+  - `datetime` không null
+  - `location_id` không null
+  - `parameter` không null
+  - `value_standard` không null
+  - `value_standard >= 0` (chỉ giá trị hợp lệ)
+  - `value_standard` không phải NaN
+- **Giữ lại**: `datetime`, `location_id`, `location_name`, `country`, `latitude`, `longitude`, `parameter`, `value` (từ value_standard), `aqi`, `aqi_category`
+
+**Output:**
+- Path: `s3a://air-quality-data/silver/year=YYYY/month=MM/day=DD/*.parquet`
+- Format: Parquet (columnar, compressed)
+- **Đặc điểm**: Dữ liệu đã được làm sạch, chuẩn hóa, sẵn sàng cho phân tích
+
+**Mục đích:**
+- ✅ Data quality: Loại bỏ invalid values, outliers cơ bản
+- ✅ Standardization: Chỉ giữ giá trị đã chuẩn hóa (US EPA)
+- ✅ Simplified schema: Bỏ các fields không cần thiết cho ML
+
+**Ví dụ record:**
+```
+datetime: 2024-01-15 10:00:00
+location_id: 12345
+parameter: pm25
+value: 45.2  (đã chuẩn hóa, không còn unit)
+aqi: 125
+aqi_category: "Unhealthy for Sensitive Groups"
+```
+
+**So với Bronze:**
+- ❌ Bỏ: `value` (gốc), `unit`, `ingestion_timestamp`
+- ✅ Giữ: Tất cả fields còn lại, nhưng `value` = `value_standard` từ Bronze
+
+---
+
+#### 3. **Gold Layer** (Aggregated Data - Dữ liệu tổng hợp theo giờ)
+
+**File:** `spark/batch_processor.py`  
+**Hàm:** `process_silver_to_gold(spark)`
+
+**Input:** Parquet files từ Silver layer
+
+**Xử lý:**
+- **Đọc từ Silver**: Load Parquet files từ MinIO
+- **Aggregation**:
+  - Group by: `location_id` + `hour_datetime` (truncate datetime về giờ)
+  - **AQI**: Lấy `max(aqi)` trong giờ đó (worst case)
+  - **Parameters**: `collect_list(parameter)` → array các parameters có trong giờ đó
+  - **Values**: `collect_list(value)` → array các giá trị tương ứng với parameters
+  - **AQI Category**: Lấy `max(aqi_category)` (worst case)
+- **Giữ lại**: `datetime` (hour level), `location_id`, `location_name`, `country`, `latitude`, `longitude`, `aqi`, `aqi_category`, `parameters` (array), `values` (array)
+
+**Output:**
+- Path: `s3a://air-quality-data/gold/year=YYYY/month=MM/day=DD/*.parquet`
+- Format: Parquet (columnar, compressed)
+- **Đặc điểm**: 1 record = 1 location × 1 giờ, với tất cả parameters trong arrays
+
+**Mục đích:**
+- ✅ Time series format: Phù hợp cho ML training (hourly data)
+- ✅ Aggregated: Giảm số lượng records (từ ~11M → ~5.4M)
+- ✅ Complete picture: Mỗi record chứa tất cả pollutants trong giờ đó
+
+**Ví dụ record:**
+```
+datetime: 2024-01-15 10:00:00
+location_id: 12345
+location_name: "Station Name"
+country: "VN"
+latitude: 10.8231
+longitude: 106.6297
+aqi: 125  (max trong giờ)
+aqi_category: "Unhealthy for Sensitive Groups"
+parameters: ["pm25", "pm10", "o3"]  (array)
+values: [45.2, 78.5, 120.3]  (array, tương ứng với parameters)
+```
+
+**So với Silver:**
+- ✅ Aggregated: Nhiều records (1 record/parameter/giờ) → 1 record/location/giờ
+- ✅ Arrays: `parameters` và `values` là arrays thay vì separate columns
+- ✅ Simplified: Không còn column `parameter` riêng lẻ
+
+**Lưu ý:**
+- Số records giảm từ ~11M (Bronze/Silver) xuống ~5.4M (Gold) là bình thường
+- Lý do: Nhiều parameters trong cùng 1 giờ được aggregate thành 1 record
+
+---
+
+**Ưu điểm của Pipeline tuần tự:**
+- ✅ **Giảm workload**: Parse Kafka chỉ 1 lần (Bronze), Silver/Gold đọc từ Parquet (nhanh hơn)
+- ✅ **Tái sử dụng data**: Mỗi tầng phụ thuộc tầng trước, không parse lại từ Kafka
+- ✅ **Phù hợp batch processing**: Chạy on-demand cho ML training, không cần real-time
+- ✅ **Data quality**: Từng bước làm sạch và chuẩn hóa dữ liệu
+- ✅ **Flexibility**: Có thể chạy lại từng tầng riêng lẻ nếu cần
+
+**Bảng so sánh các tầng:**
+
+| Aspect | Bronze | Silver | Gold |
+|--------|--------|--------|------|
+| **File** | `spark/batch_processor.py` | `spark/batch_processor.py` | `spark/batch_processor.py` |
+| **Hàm** | `process_kafka_to_bronze()` | `process_bronze_to_silver()` | `process_silver_to_gold()` |
+| **Input** | Kafka (JSON) | Bronze Parquet | Silver Parquet |
+| **Records** | ~11M | ~11M | ~5.4M |
+| **Format** | 1 record/parameter/time | 1 record/parameter/time | 1 record/location/hour |
+| **Fields** | Tất cả (bao gồm `value`, `unit`, `ingestion_timestamp`) | Đã cleaned (chỉ `value_standard`) | Aggregated (arrays) |
+| **Data Quality** | Raw (chỉ filter null cơ bản) | Cleaned (validate values) | Aggregated (max AQI) |
+| **Use Case** | Audit, replay | Analysis, detailed queries | ML training, time series |
+| **Schema** | Flat (separate columns) | Flat (separate columns) | Nested (arrays) |
+
+**File chính:** `spark/batch_processor.py`  
+**Entry point:** `main()` - gọi các hàm xử lý theo thứ tự tuần tự
 
 ### Bước 3: Load vào ClickHouse
 **Input:** Parquet files từ MinIO (đã được Spark ghi ở Bước 2)  
