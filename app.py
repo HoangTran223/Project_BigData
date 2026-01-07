@@ -280,6 +280,20 @@ def fetch_lag_features_from_openaq(location_id, sensors):
                 if not sensor_id:
                     continue
                 
+                # Get parameter info from sensor (same as get_station_data)
+                param_info = sensor.get("parameter", {})
+                param = param_info.get("name", "").lower()
+                
+                # Only process relevant parameters
+                if param not in PARAMETERS:
+                    continue
+                
+                # Get unit from sensor info (same as get_station_data)
+                unit = param_info.get("units", "")
+                if not unit:
+                    # Fallback: try to get from sensor directly
+                    unit = sensor.get("units", "")
+                
                 try:
                     headers = {"X-API-Key": get_next_api_key()}
                     # Fetch measurements around target time (±1 hour window)
@@ -342,35 +356,40 @@ def fetch_lag_features_from_openaq(location_id, sensors):
                             # Only use if matches target hour (allow ±1 hour tolerance for API timing)
                             time_diff = abs((dt_hour - target_time).total_seconds())
                             if time_diff <= 3600:  # Within 1 hour
-                                parameter = result.get("parameter", {}).get("name", "").lower()
-                                if not parameter:
-                                    # Try alternative path
-                                    param_info = result.get("parameter")
-                                    if isinstance(param_info, dict):
-                                        parameter = param_info.get("name", "").lower()
-                                
+                                # Get value from result
                                 value = result.get("value")
-                                unit = result.get("unit", "")
                                 
-                                if value and parameter:
-                                    value_standard = convert_unit_to_standard(value, parameter, unit)
-                                    aqi = calculate_aqi_for_pollutant(value_standard, parameter)
+                                # Use parameter from sensor (not from result) - same as get_station_data
+                                # Use unit from sensor (not from result) - same as get_station_data
+                                
+                                if value is not None:
+                                    # Convert unit and calculate AQI (same logic as get_station_data)
+                                    value_standard = convert_unit_to_standard(value, param, unit)
+                                    aqi = calculate_aqi_for_pollutant(value_standard, param)
+                                    
                                     if aqi:
                                         aqi_values.append(aqi)
+                                        # Debug log for first successful calculation
+                                        if len(aqi_values) == 1:
+                                            print(f"Debug - Calculated AQI for {lag_key}: param={param}, value={value}, unit={unit}, value_standard={value_standard:.2f}, aqi={aqi}")
                         except Exception as e:
-                            # Silently continue - some measurements may have different formats
+                            # Log error for debugging
+                            print(f"Debug - Error processing measurement for {lag_key}, sensor {sensor_id}: {e}")
                             continue
                     
                     time.sleep(0.1)  # Small delay between sensors
                     
-                except requests.exceptions.RequestException:
+                except requests.exceptions.RequestException as e:
+                    print(f"Debug - Request error for sensor {sensor_id}, {lag_key}: {e}")
                     continue
             
             # Take max AQI from all sensors for this time point
             if aqi_values:
                 lag_aqi[lag_key] = max(aqi_values)
+                print(f"Debug - {lag_key}: max AQI = {lag_aqi[lag_key]} from {len(aqi_values)} measurements")
             else:
                 lag_aqi[lag_key] = None
+                print(f"Debug - {lag_key}: No AQI values found")
         
         return lag_aqi
         
